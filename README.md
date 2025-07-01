@@ -4,7 +4,7 @@ Projeto desenvolvido para a disciplina **Infraestrutura de Comunicações - 2025
 
 ## 📦 Objetivo
 
-Criar um sistema cliente-servidor com suporte a múltiplos usuários, transmissão de arquivos e mensagens via terminal, utilizando UDP com implementação de confiabilidade na camada de aplicação (RDT 3.0).
+Projeto de chat com sala única em Python usando UDP. Inclui envio e devolução de arquivos, implementação do protocolo RDT 3.0 para transferência confiável e chat multiusuário com comandos via terminal: conexão, lista de usuários, amigos, banimento e mais.
 
 ## 🛠️ Tecnologias e Ferramentas
 
