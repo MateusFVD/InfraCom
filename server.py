@@ -11,8 +11,7 @@ server_socket.bind((HOST, PORT))
 
 print(f"Servidor UDP iniciado e escutando em {HOST}:{PORT}")
 
-while True:
-    print("\nAguardando um cliente se conectar...")
+print("\nAguardando um cliente se conectar...")
 
 try:
     file_bytes = b""
