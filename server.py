@@ -15,6 +15,8 @@ while True:
     print("\nAguardando um cliente se conectar...")
 
 try:
+    file_bytes = b""
+
     file_name_bytes, client_address = server_socket.recvfrom(
         BUFFER_SIZE
     )  # recebe o nome do arquivo em bytes e o endereço de quem enviou (cliente)!! necessário para retornar o arquivo
@@ -30,20 +32,24 @@ try:
 
     with open(server_file_name, "wb") as f:
         print("Iniciando recepção do arquivo...")
+        dcount = 0
         while True:
             # recebe um pedaço do arquivo
             data, _ = server_socket.recvfrom(BUFFER_SIZE)
+            dcount += 1
 
             # verifica se recebemos o sinal de fim de arquivo do cliente
             if data == b"<END>":
                 print("Sinal de <END> recebido. O arquivo foi completamente recebido.")
+                dcount = 0
                 break
+            else:  # se não, salva o pedaço do arquivo na sequencia de bytes
+                file_bytes += data
 
-            # escreve um pedaço recebido no arquivo
-            f.write(data)
+            # torna toda sequencia de bytes em um aquivo
+            f.write(file_bytes)
 
     print("Arquivo salvo com sucesso no servidor.")
 
 except Exception as e:
     print(f"Ocorreu um erro durante a recepção: {e}")
-
