@@ -50,5 +50,29 @@ try:
 
     print("Arquivo salvo com sucesso no servidor.")
 
+    # ========== PROCESSAR ARQUIVO RECEBIDO E ENVIAR PARA CLIENTE ==========
+    
+    # Processar arquivo recebido - enviar nome do arquivo processado para o cliente
+    print(f"\nProcessando arquivo recebido...")
+    print(f"Enviando nome do arquivo processado: '{server_file_name}' para o cliente")
+    server_socket.sendto(server_file_name.encode(), client_address)
+    
+    # Enviar arquivo processado de volta para o cliente
+    print("Iniciando envio do arquivo processado para o cliente...")
+    with open(server_file_name, "rb") as f:
+        dcount = 0
+        while True:
+            file_data = f.read(BUFFER_SIZE)  # Lê 1024 bytes do arquivo
+            if not file_data:
+                # Quando o arquivo é lido por completo, envia "<END>" para indicar o fim
+                server_socket.sendto(b"<END>", client_address)
+                print("Sinal de <END> enviado. Arquivo processado enviado completamente.")
+                break
+            server_socket.sendto(file_data, client_address)  # Envia partes do arquivo
+            dcount += 1
+            print(f"Enviando datagrama {dcount} para o cliente")
+    
+    print("Arquivo processado enviado com sucesso para o cliente!")
+
 except Exception as e:
     print(f"Ocorreu um erro durante a recepção: {e}")
