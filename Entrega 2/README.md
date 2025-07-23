@@ -6,7 +6,7 @@ Essa seção explica o cálculo do valor de `40 bytes` adotados para o overhead 
 # **Overhead Estimado para um Pacote de Dados (do Remetente):**
 
 A estrutura do JSON para o pacote de dados é:
-``` javascript
+``` json
 {"seq_num": 0, "data": "seus_dados_aqui"}
 ```
 
@@ -35,7 +35,7 @@ Vamos somar os caracteres literais e o espaço para os valores:
 # **Overhead Estimado para um Pacote ACK (do Receptor):**
 
 A estrutura do JSON para o pacote ACK é:
-``` javascript
+``` json
 {"type": "ACK", "seq_num": 0}
 ```
 
@@ -60,6 +60,8 @@ Vamos somar os caracteres literais e o espaço para os valores:
     `}`: 1 byte
 
 **Total mínimo de overhead para um pacote ACK:** 1+6+2+5+2+9+2+1+1 = `29 bytes`
+
+Como nossa maior estimativa mínima é de `29 bytes` de overhead, decidimos colocar `40 bytes` para haver uma margem de segurança
 
 ## 💻 Como Executar
 
