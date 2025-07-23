@@ -8,7 +8,7 @@ SERVER_ADDRESS = (HOST, PORT)
 BUFFER_SIZE = 1024
 
 # Tamanho máximo de dados dentro de um pacote RDT, ajustado para o overhead do JSON
-RDT_DATA_CHUNK_SIZE = BUFFER_SIZE - 50
+RDT_DATA_CHUNK_SIZE = BUFFER_SIZE - 40
 
 # criando o socket do servidor
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
