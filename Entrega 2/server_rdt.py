@@ -18,11 +18,11 @@ print("Aguardando um cliente se conectar...")
 
 try:
     # ========== RECEBENDO ARQUIVO DO CLIENTE ==========
-    print("RDT3.0 Servidor: Iniciando protocolo RDT3.0 para recepção")
+    print("Servidor: Iniciando protocolo RDT3.0 para recepção")
     
     # Primeiro, vamos receber uma mensagem UDP normal para obter o endereço do cliente
     first_msg, client_address = server_socket.recvfrom(1024)
-    print(f"RDT3.0 Servidor: Cliente conectado de {client_address}")
+    print(f"Servidor: Cliente conectado de {client_address}")
     
     # Agora processa essa primeira mensagem e as próximas usando RDT3.0
     rdt_receiver = RDT3_0_Receiver(server_socket)
@@ -35,9 +35,9 @@ try:
         ack_pkt = rdt_receiver.make_pkt(0, b'', 0)
         server_socket.sendto(ack_pkt, client_address)
         rdt_receiver.expected_seq = 1  # Próximo esperado é 1
-        print(f"RDT3.0 Servidor: Nome do arquivo recebido: {filename}")
+        print(f"Servidor: Nome do arquivo recebido: {filename}")
     else:
-        print("RDT3.0 Servidor: Erro na primeira mensagem")
+        print("Servidor: Erro na primeira mensagem")
         exit()
 
     # cria o nome do arquivo que será salvo no servidor!
@@ -53,23 +53,23 @@ try:
 
             # se não receber dados do cliente, encerra o laço
             if not data or len(data) == 0:
-                print("RDT3.0 Servidor: Recebido pacote de finalização")
+                print("Servidor: Recebido pacote de finalização")
                 break
 
             # adiciona a sequencia de bytes no arquivo
             f.write(data)
-            print(f"RDT3.0 Servidor: Recebido chunk de {len(data)} bytes")
+            print(f"Servidor: Recebido chunk de {len(data)} bytes")
 
     print("Arquivo recebido com sucesso pelo servidor usando RDT3.0.")
 
     # ========== PROCESSAR ARQUIVO RECEBIDO E ENVIAR PARA CLIENTE ==========
-    print("RDT3.0 Servidor: Iniciando envio usando RDT3.0")
+    print("Servidor: Iniciando envio")
     
     # Cria o sender RDT3.0
     rdt_sender = RDT3_0_Sender(server_socket, client_address)
 
     # Processar arquivo recebido - enviar nome do arquivo processado para o cliente
-    print(f"RDT3.0 Servidor: Enviando nome do arquivo: {server_filename}")
+    print(f"Servidor: Enviando nome do arquivo: {server_filename}")
     rdt_sender.rdt_send(server_filename.encode())
 
     # Enviar arquivo processado de volta para o cliente
@@ -82,18 +82,18 @@ try:
             
             # Se não ler dados do arquivo, envia pacote vazio e encerra o laço
             if not chunk:
-                print("RDT3.0 Servidor: Enviando pacote de finalização")
+                print("Servidor: Enviando pacote de finalização")
                 rdt_sender.rdt_send(b'')  # Envia pacote vazio para sinalizar fim
                 break
             
             # Envia partes do arquivo usando RDT3.0
-            print(f"RDT3.0 Servidor: Enviando chunk de {len(chunk)} bytes")
+            print(f"Servidor: Enviando chunk de {len(chunk)} bytes")
             rdt_sender.rdt_send(chunk)
 
     print("Arquivo processado enviado com sucesso para o cliente usando RDT3.0!")
 
     # Processar arquivo recebido - enviar nome do arquivo processado para o cliente
-    print(f"RDT3.0 Servidor: Enviando nome do arquivo: {server_filename}")
+    print(f"Servidor: Enviando nome do arquivo: {server_filename}")
     rdt_sender.rdt_send(server_filename.encode())
 
     # Enviar arquivo processado de volta para o cliente
@@ -106,12 +106,12 @@ try:
             
             # Se não ler dados do arquivo, envia pacote vazio e encerra o laço
             if not chunk:
-                print("RDT3.0 Servidor: Enviando pacote de finalização")
+                print("Servidor: Enviando pacote de finalização")
                 rdt_sender.rdt_send(b'')  # Envia pacote vazio para sinalizar fim
                 break
             
             # Envia partes do arquivo usando RDT3.0
-            print(f"RDT3.0 Servidor: Enviando chunk de {len(chunk)} bytes")
+            print(f"Servidor: Enviando chunk de {len(chunk)} bytes")
             rdt_sender.rdt_send(chunk)
 
     print("Arquivo processado enviado com sucesso para o cliente usando RDT3.0!")
@@ -123,4 +123,4 @@ except Exception as e:
 
 finally:
     server_socket.close()
-    print("RDT3.0 Servidor: Socket fechado")
+    print("Servidor: Socket fechado")

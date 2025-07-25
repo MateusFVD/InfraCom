@@ -35,10 +35,10 @@ try:
     # Cria o sender RDT3.0
     rdt_sender = RDT3_0_Sender(client_socket, SERVER_ADDRESS)
     
-    print(f"Enviando {filename} para o servidor usando RDT3.0")
+    print(f"Enviando {filename} para o servidor")
     
     # Envia o nome do arquivo usando RDT3.0
-    print(f"RDT3.0 Cliente: Enviando nome do arquivo: {filename}")
+    print(f"Cliente: Enviando nome do arquivo: {filename}")
     rdt_sender.rdt_send(filename.encode())
 
     # Usar o "with", abre o arquivo em modo de leitura e garante que será fechado automaticamente
@@ -47,20 +47,20 @@ try:
             # Lê 1024 bytes do arquivo
             chunk = f.read(BUFFER_SIZE)
             
-            # Se não ler dados do arquivo, envia pacote vazio e encerra o laço
+            # Se não ler os dados do arquivo, envia pacote vazio e encerra o laço
             if not chunk:
-                print("RDT3.0 Cliente: Enviando pacote de finalização")
+                print("Cliente: Enviando pacote de finalização")
                 rdt_sender.rdt_send(b'')  # Envia pacote vazio para sinalizar fim
                 break
             
             # Envia partes do arquivo usando RDT3.0
-            print(f"RDT3.0 Cliente: Enviando chunk de {len(chunk)} bytes")
+            print(f"Cliente: Enviando chunk de {len(chunk)} bytes")
             rdt_sender.rdt_send(chunk)
 
-    print("RDT3.0 Cliente: Arquivo enviado com sucesso usando RDT3.0")
+    print("Cliente: Arquivo enviado com sucesso usando RDT3.0")
 
     # ---------- RECEBENDO O ARQUIVO DE VOLTA USANDO RDT3.0 ---------------------------
-    print("RDT3.0 Cliente: Iniciando recepção usando RDT3.0")
+    print("Cliente: Iniciando recepção")
     
     # Cria o receiver RDT3.0
     rdt_receiver = RDT3_0_Receiver(client_socket)
@@ -69,12 +69,12 @@ try:
     filename_data = rdt_receiver.rdt_rcv(SERVER_ADDRESS)
     received_filename = filename_data.decode()
     
-    print(f"RDT3.0 Cliente: Nome do arquivo recebido: {received_filename}")
+    print(f"Cliente: Nome do arquivo recebido: {received_filename}")
 
     # cria o nome do arquivo que será salvo no cliente!
     client_filename = "client_" + received_filename
 
-    print(f"Recebendo {client_filename} do servidor usando RDT3.0")
+    print(f"Recebendo {client_filename} do servidor")
     
     # cria um novo arquivo no modo "write binary" para escrever o arquivo recebido
     with open(client_filename, "wb") as f:
@@ -84,14 +84,14 @@ try:
 
             # se não receber dados do servidor, encerra o laço
             if not data or len(data) == 0:
-                print("RDT3.0 Cliente: Recebido pacote de finalização")
+                print("Cliente: Pacote de finalização recebido")
                 break
 
             # adiciona a sequencia de bytes no arquivo
             f.write(data)
-            print(f"RDT3.0 Cliente: Recebido chunk de {len(data)} bytes")
+            print(f"Cliente: chunk de {len(data)} bytes recebido")
 
-    print("RDT3.0 Cliente: Arquivo recebido com sucesso usando RDT3.0!")
+    print("Cliente: Arquivo recebido com sucesso!")
 
 except FileNotFoundError:
     print(f"Erro: O arquivo {filename} não foi encontrado.")
@@ -105,4 +105,4 @@ except Exception as e:
 
 finally:
     client_socket.close()
-    print("RDT3.0 Cliente: Socket fechado")
+    print("Cliente: Socket fechado")
