@@ -1,5 +1,5 @@
 import socket
-from rdt_protocol import RDT3_0_Receiver
+from rdt_protocol import RDT3_0_Receiver, RDT3_0_Sender
 
 HOST = "127.0.0.1"
 PORT = 5000
@@ -32,7 +32,8 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Instancia as máquinas de estado RDT
 # O cliente é primariamente um remetente no início, e depois um receptor
 
-rdt_receiver = RDT3_0_Receiver(client_socket, SERVER_ADDRESS) # O endereço do cliente é desconhecido para o receiver até o primeiro pacote chegar
+rdt_sender = RDT3_0_Sender(client_socket, SERVER_ADDRESS, timeout=1.0, loss_prob=0.1)
+rdt_receiver = RDT3_0_Receiver(client_socket, SERVER_ADDRESS)
 # -------------ENVIO DO ARQUIVO -------------------------------------
 
 try:
@@ -45,36 +46,30 @@ try:
         while True:
             # Lê um espaço de dados para o RDT
             chunk = f.read(RDT_DATA_CHUNK_SIZE)
-            # Envia partes do arquivo em segmentos de 1024 bytes.
-            client_socket.sendto(chunk, SERVER_ADDRESS)
-
-            # Se não ler dados do arquivo, encerra o laço
             if not chunk:
+                # Envia um marcador de fim de transmissão
+                rdt_sender.rdt_send(b"EOF_TRANSMISSION")
                 break
+            # Envia partes do arquivo usando o RDT sender
+            rdt_sender.rdt_send(chunk)
 
     # ---------- RECEBENDO O ARQUIVO DE VOLTA ---------------------------
 
-    # Recebe o nome do arquivo que o cliente vai enviar
-    filename, _ = client_socket.recvfrom(BUFFER_SIZE)
-
-    # cria o nome do arquivo que será salvo no cliente!
-    client_filename = "client_" + filename.decode()
+    # Recebe o nome do arquivo que o cliente vai receber de volta
+    filename_recv, _ = client_socket.recvfrom(BUFFER_SIZE)
+    client_filename = "client_" + filename_recv.decode()
 
     print(f"Recebendo {client_filename} do servidor")
-    # cria um novo arquivo no modo "append" para adicionar cada pedaço de arquivo recebido ao novo arquivo criado
     with open(client_filename, "ab") as f:
         while True:
-            # Tenta receber um pacote do servidor
             try:
                 client_socket.settimeout(0.5) #Tempo limite para esperar por pacotes
                 rcvpkt, server_address = client_socket.recvfrom(BUFFER_SIZE)
-                # Processa o pacote recebido com o RDT receiver
                 data = rdt_receiver.rdt_rcv(rcvpkt)
 
                 if data is not None:
                     if data == b"EOF_TRANSMISSION":
                         break
-                    # adiciona a sequencia de bytes no aquivo
                     f.write(data)
 
             except socket.timeout:
