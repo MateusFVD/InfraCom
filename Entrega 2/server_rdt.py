@@ -5,7 +5,7 @@ HOST = "127.0.0.1"
 PORT = 5000
 SERVER_ADDRESS = (HOST, PORT)
 
-BUFFER_SIZE = 1000  # Reduzido para deixar espaço para cabeçalho RDT3.0
+BUFFER_SIZE = 1023  # Reservando apenas 1 byte para o número de sequência
 
 # criando o socket do servidor
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -32,7 +32,7 @@ try:
         filename_data = rdt_receiver.extract_data(first_msg)
         filename = filename_data.decode()
         # Envia ACK
-        ack_pkt = rdt_receiver.make_pkt(0, b'', 0)
+        ack_pkt = rdt_receiver.make_pkt(0, b'')
         server_socket.sendto(ack_pkt, client_address)
         rdt_receiver.expected_seq = 1  # Próximo esperado é 1
         print(f"RDT3.0 Servidor: Nome do arquivo recebido: {filename}")
