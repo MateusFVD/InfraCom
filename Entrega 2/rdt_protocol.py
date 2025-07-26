@@ -1,6 +1,18 @@
 import socket
 import time
 import struct
+import random # para gerar números aleatórios
+
+# --- Simulação do canal não confiável ---
+# Altere este valor para a probabilidade de perda (ex: 0.3 = 30%)
+LOSS_PROBABILITY = 0.3
+
+def udt_send_with_loss( socket_obj, packet, address):
+    if random.random() < LOSS_PROBABILITY:
+        print(f"Simulação de perda: Pacote perdido")
+        # Não fazemos nada, o pacote simplesmente não é enviado
+    else:
+        socket_obj.sendto(packet, address)
 
 class RDT3_0_Sender:
     def __init__(self, socket_obj, server_address, timeout=2.0):
@@ -47,7 +59,8 @@ class RDT3_0_Sender:
         self.sndpkt = self.make_pkt(self.seq_num, data)
         
         # udt_send(sndpkt)
-        self.socket.sendto(self.sndpkt, self.server_address)
+        #self.socket.sendto(self.sndpkt, self.server_address)
+        udt_send_with_loss(self.socket, self.sndpkt, self.server_address)
         
         # start_timer
         self.start_timer()
@@ -80,7 +93,8 @@ class RDT3_0_Sender:
                 if self.is_timeout():
                     print(f"RDT3.0 Sender: Timeout! Reenviando pacote seq={self.seq_num}")
                     # Reenvia o pacote
-                    self.socket.sendto(self.sndpkt, self.server_address)
+                    #self.socket.sendto(self.sndpkt, self.server_address)
+                    udt_send_with_loss(self.socket, self.sndpkt, self.server_address)
                     # Reinicia o timer
                     self.start_timer()
                 # Continua o loop
@@ -145,7 +159,8 @@ class RDT3_0_Receiver:
                 self.sndpkt = self.make_pkt(self.expected_seq, b'')
                 
                 # udt_send(sndpkt)
-                self.socket.sendto(self.sndpkt, client_address)
+                #self.socket.sendto(self.sndpkt, client_address)
+                udt_send_with_loss(self.socket, self.sndpkt, client_address)
                 print(f"Receiver: ACK enviado para seq={self.expected_seq}")
                 
                 # Alterna número de sequência esperado
@@ -161,7 +176,8 @@ class RDT3_0_Receiver:
                 self.sndpkt = self.make_pkt(wrong_seq, b'')
                 
                 # udt_send(sndpkt)
-                self.socket.sendto(self.sndpkt, client_address)
+                #self.socket.sendto(self.sndpkt, client_address)
+                udt_send_with_loss(self.socket, self.sndpkt, client_address)
                 print(f"Receiver: ACK reenviado para seq={wrong_seq}")
                 
                 # Continua esperando o pacote correto
