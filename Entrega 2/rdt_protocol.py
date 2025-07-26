@@ -1,11 +1,10 @@
 import socket
 import time
 import struct
-import random # para gerar números aleatórios
+import random 
 
 # --- Simulação do canal não confiável ---
-# Altere este valor para a probabilidade de perda (ex: 0.3 = 30%)
-LOSS_PROBABILITY = 0.3
+LOSS_PROBABILITY = 0.005
 
 def udt_send_with_loss( socket_obj, packet, address):
     if random.random() < LOSS_PROBABILITY:
