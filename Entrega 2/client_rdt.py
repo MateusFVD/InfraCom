@@ -5,7 +5,7 @@ HOST = "127.0.0.1"
 PORT = 5000
 SERVER_ADDRESS = (HOST, PORT)
 
-BUFFER_SIZE = 1000  # Reduzido para deixar espaço para cabeçalho RDT3.0
+BUFFER_SIZE = 1023  # Reservando apenas 1 byte para o número de sequência
 
 
 def choose_file():

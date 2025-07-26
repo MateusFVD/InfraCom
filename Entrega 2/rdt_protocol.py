@@ -1,5 +1,4 @@
 import socket
-import threading
 import time
 import struct
 
@@ -10,54 +9,42 @@ class RDT3_0_Sender:
         self.timeout = timeout
         self.sndpkt = None
         self.seq_num = 0  # Inicia com número de sequência 0
-        self.timer = None
+        self.timer_start = None
         
-    def make_pkt(self, seq, data, checksum=0):
-        """Criando um pacote com número de sequência, dados e checksum"""
-        # Formato: seq_num (1 byte) + checksum (4 bytes) + data
-        # Limita dados a 1000 bytes para deixar espaço para cabeçalho
-        if len(data) > 1000:
-            data = data[:1000]
-        pkt = struct.pack('!BI', seq, checksum) + data
+    def make_pkt(self, seq, data):
+        # Formato: seq_num (1 byte) + data
+        # Limita dados a 1023 bytes para deixar espaço para cabeçalho
+        if len(data) > 1023:
+            data = data[:1023]
+        pkt = struct.pack('!B', seq) + data
         return pkt
     
     def extract_seq(self, pkt):
-        """Extraindo o número de sequência do pacote"""
         if len(pkt) < 1:
             return -1
         return struct.unpack('!B', pkt[:1])[0]
     
     def has_seq(self, pkt, expected_seq):
-        """Verificando se o pacote tem o número de sequência esperado"""
         seq = self.extract_seq(pkt)
         return seq == expected_seq
     
     def start_timer(self):
-        """Iniciando o timer para timeout"""
-        if self.timer:
-            self.timer.cancel()
-        self.timer = threading.Timer(self.timeout, self.timeout_handler)
-        self.timer.start()
+        self.timer_start = time.time()
     
     def stop_timer(self):
-        """Parando o timer"""
-        if self.timer:
-            self.timer.cancel()
-            self.timer = None
+        self.timer_start = None
     
-    def timeout_handler(self):
-        """Manipulador de timeout - reenviando o pacote"""
-        print(f"RDT3.0 Sender: Timeout! Reenviando pacote seq={self.seq_num}")
-        self.socket.sendto(self.sndpkt, self.server_address)
-        self.start_timer()
+    def is_timeout(self):
+        if self.timer_start is None:
+            return False
+        return (time.time() - self.timer_start) >= self.timeout
     
     def rdt_send(self, data):
-        """Método principal para envio confiável de dados, com timeout"""
-        print(f"Sender: Enviando dados com seq={self.seq_num}")
+        print(f"RDT3.0 Sender: Enviando dados com seq={self.seq_num}")
         
         # Estado: Esperar chamada 0 de cima (ou 1 de cima)
-        # make_pkt(seq_num, data, checksum)
-        self.sndpkt = self.make_pkt(self.seq_num, data, 0)
+        # make_pkt(seq_num, data)
+        self.sndpkt = self.make_pkt(self.seq_num, data)
         
         # udt_send(sndpkt)
         self.socket.sendto(self.sndpkt, self.server_address)
@@ -68,15 +55,15 @@ class RDT3_0_Sender:
         # Estado: Esperar ACK
         while True:
             try:
-                # Configura timeout no socket para poder detectar timeout
-                self.socket.settimeout(0.5)  # Timeout curto para verificar se timer expirou
+                # Configura timeout no socket
+                self.socket.settimeout(0.1)  # Timeout curto para verificar periodicamente
                 
                 # rdt_rcv(rcvpkt)
                 rcvpkt, addr = self.socket.recvfrom(1024)
                 
                 print(f"Sender: ACK recebido de {addr}")
                 
-                # Verifica se é ACK correto
+                # Verifica se é ACK correto (sem corrupt/notcorrupt - assumimos UDP checksum)
                 if self.has_seq(rcvpkt, self.seq_num):
                     print(f"Sender: ACK correto para seq={self.seq_num}")
                     # stop_timer
@@ -89,7 +76,14 @@ class RDT3_0_Sender:
                     # Continua esperando ACK correto
                     
             except socket.timeout:
-                # Continua o loop - timer pode ter expirado
+                # Verifica se houve timeout
+                if self.is_timeout():
+                    print(f"RDT3.0 Sender: Timeout! Reenviando pacote seq={self.seq_num}")
+                    # Reenvia o pacote
+                    self.socket.sendto(self.sndpkt, self.server_address)
+                    # Reinicia o timer
+                    self.start_timer()
+                # Continua o loop
                 continue
         
         # Restaura socket para modo bloqueante
@@ -101,35 +95,29 @@ class RDT3_0_Receiver:
         self.expected_seq = 0  # Inicia esperando sequência 0
         self.sndpkt = None
         
-    def make_pkt(self, seq, data=b'', checksum=0):
-        """Cria um pacote ACK com número de sequência"""
-        # Formato: seq_num (1 byte) + checksum (4 bytes) + data
-        pkt = struct.pack('!BI', seq, checksum) + data
+    def make_pkt(self, seq, data=b''):
+        # Formato: seq_num (1 byte) + data
+        pkt = struct.pack('!B', seq) + data
         return pkt
     
     def extract_seq(self, pkt):
-        """Extrai o número de sequência do pacote"""
         if len(pkt) < 1:
             return -1
         return struct.unpack('!B', pkt[:1])[0]
     
     def extract_data(self, pkt):
-        """Extrai os dados do pacote"""
-        if len(pkt) < 5:
+        if len(pkt) < 1:
             return b''
-        return pkt[5:]  # Pula seq_num (1 byte) + checksum (4 bytes)
+        return pkt[1:]  # Pula seq_num (1 byte)
     
     def has_seq(self, pkt, expected_seq):
-        """Verifica se o pacote tem o número de sequência esperado"""
         seq = self.extract_seq(pkt)
         return seq == expected_seq
     
     def deliver_data(self, data):
-        """Entrega os dados para a camada superior"""
         return data
     
     def rdt_rcv(self, client_address=None):
-        """Método principal para recepção confiável de dados"""
         while True:
             print(f"Receiver: Esperando pacote seq={self.expected_seq}")
             
@@ -143,7 +131,7 @@ class RDT3_0_Receiver:
             
             print(f"Receiver: Pacote recebido de {addr}")
             
-            # Verifica se é o pacote esperado e não corrompido
+            # Verifica se é o pacote esperado (sem corrupt/notcorrupt - assumimos UDP checksum)
             if self.has_seq(rcvpkt, self.expected_seq):
                 print(f"Receiver: Pacote correto seq={self.expected_seq}")
                 
@@ -153,8 +141,8 @@ class RDT3_0_Receiver:
                 # deliver_data(data)
                 delivered_data = self.deliver_data(data)
                 
-                # sndpkt = make_pkt(ACK, expected_seq, checksum)
-                self.sndpkt = self.make_pkt(self.expected_seq, b'', 0)
+                # sndpkt = make_pkt(ACK, expected_seq)
+                self.sndpkt = self.make_pkt(self.expected_seq, b'')
                 
                 # udt_send(sndpkt)
                 self.socket.sendto(self.sndpkt, client_address)
@@ -168,9 +156,9 @@ class RDT3_0_Receiver:
             else:
                 print(f"Receiver: Pacote incorreto, esperava seq={self.expected_seq}")
                 
-                # sndpkt = make_pkt(ACK, 1-expected_seq, checksum)
+                # sndpkt = make_pkt(ACK, 1-expected_seq)
                 wrong_seq = 1 - self.expected_seq
-                self.sndpkt = self.make_pkt(wrong_seq, b'', 0)
+                self.sndpkt = self.make_pkt(wrong_seq, b'')
                 
                 # udt_send(sndpkt)
                 self.socket.sendto(self.sndpkt, client_address)
