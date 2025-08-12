@@ -9,6 +9,8 @@ clients = {}
 # dicionário para guardar o estado RDT de cada cliente: {(ip, port): expected_seq_num}
 client_rdt_state = {}
 
+client_senders = {}
+
 # proteger o acesso ao dicionário, evitar mais de uma thread mexendo ao mesmo tempo
 clients_lock = threading.Lock() 
 
@@ -32,13 +34,14 @@ def handle_message(packet, address, sock):
 
     # pega o próximo número de sequência esperado para este endereço.
 
-    expected_seq = client_rdt_state.get(address, 0)
+    with clients_lock:
+        expected_seq = client_rdt_state.get(address, 0)
     
     receiver_tool = RDT3_0_Receiver(sock) # usamos a classe como uma ferramenta sem estado aqui
 
+    received_seq = receiver_tool.extract_seq(packet)
     # o pacote recebido tem a sequência que estávamos esperando para este cliente?
-    if receiver_tool.has_seq(packet, expected_seq):
-        # se sim, processa o pacote
+    if received_seq == expected_seq:
         message_bytes = receiver_tool.extract_data(packet)
         message = message_bytes.decode()
         
@@ -47,78 +50,89 @@ def handle_message(packet, address, sock):
         sock.sendto(ack_packet, address)
         
         # ATUALIZA A MEMÓRIA: Agora vamos esperar o próximo número de sequência
-        client_rdt_state[address] = 1 - expected_seq
+        with clients_lock:
+            client_rdt_state[address] = 1 - expected_seq
         
+        process_client_message(message, address, sock)
+
     else: # se o pacote for duplicado ou fora de ordem
-        # descobre qual era o ACK anterior
-        wrong_seq = receiver_tool.extract_seq(packet)
         ack_to_resend = 1 - expected_seq
-        # reenvia o último ACK correto para ajudar o cliente a se resincronizar
         ack_packet = receiver_tool.make_pkt(ack_to_resend, b'')
         sock.sendto(ack_packet, address)
-        print(f"Recebido pacote fora de ordem de {address} (seq={wrong_seq}, esperava={expected_seq}). Reenviando ACK {ack_to_resend}.")
-        return # para de processar esta mensagem duplicada
+        print(f"Pacote fora de ordem de {address} (seq={received_seq}, esperava={expected_seq}). Reenviando ACK {ack_to_resend}.")
 
+        
+def process_client_message(message, address, sock):        
     if "hi, meu nome eh " in message:
-
-        # extrai o nome do user
         username = message.split("hi, meu nome eh ")[1].strip()
-
-        # bloqueia o dicionario
+        
         with clients_lock:
-
-            # verificando se o nome já está em uso
-            if username in clients:
-
-                print(f"Tentativa de conexão com nome duplicado: {username}")
+            if username in [name for name, addr in clients.values()]:
                 error_message = "ERRO: Nome de usuário já existe. Tente outro."
-
-                sender = RDT3_0_Sender(sock, address)
-                sender.rdt_send(error_message.encode())
+                temp_sender = RDT3_0_Sender(sock, address)
+                temp_sender.rdt_send(error_message.encode())
                 return 
             
-            clients[username] = address
+
+            clients[address] = (username, address)
+            # client_rdt_state[address] = 0
+
+            client_senders[address] = RDT3_0_Sender(sock, address)
+
             print(f"Usuário '{username}' conectado de {address}")
 
-        broadcast_message(f"SERVER_INFO:{username} entrou na sala.", sock, origin_address=address) # O 'origin_address' evita que a mensagem seja enviada de volta para quem acabou de entrar
+        # Formata corretamente a mensagem de entrada
+        broadcast_message(f"SERVER_INFO:{username} entrou na sala.", sock, origin_address=address)
 
+    elif "bye" in message:
+        with clients_lock:
+            if address in clients:
+                username, _ = clients[address]
+                del clients[address]
+                
+                # limpa o estado RDT do cliente que saiu
+                if address in client_rdt_state:
+                    del client_rdt_state[address]
+                if address in client_senders:
+                    del client_senders[address]
+                    
+                broadcast_message(f"SERVER_INFO:{username} saiu da sala.", sock)
+                print(f"Usuário '{username}' desconectado")
 
     else:
-
-        send_username = None
-
+        sender_username = None
         with clients_lock:
-            # Procura no dicionário qual usuário tem o endereço do remetente
-            for name, addr in clients.items():
-                if addr == address:
-                    sender_username = name
-                    break
+            if address in clients:
+                sender_username, _ = clients[address]
         
-        if send_username:
-
-            timestamp = datetime.now().strftime("%H:%M:%S %d/%m/%Y") # pegando data e hora formatada
+        if sender_username:
+            # formata a mensagem 
+            timestamp = datetime.now().strftime("%H:%M:%S %d/%m/%Y")
             formatted_message = f"{address[0]}:{address[1]}/~{sender_username}: {message} {timestamp}"
-
+            
             print(f"Retransmitindo mensagem de {sender_username}")
+            # envia a mensagem para todos, exceto o remetente original 
             broadcast_message(formatted_message, sock, origin_address=address)
-
-
+            
 # envia uma mensagem para todos os clientes conectados
 def broadcast_message(message, sock, origin_address=None):
-
     with clients_lock:
-        for username, address in clients.copy().items():
-
+        clients_copy = clients.copy()
+        # Prepara a mensagem uma única vez
+        message_bytes = message.encode()
+        
+        for address, (username, _) in clients_copy.items():
             if address == origin_address:
                 continue
-
+            
             try:
-
-                sender = RDT3_0_Sender(sock, address)
-                sender.rdt_send(message.encode())
-
-                print(f"Enviando broadcast para {username}@{address}")
-
+                # Usa a instância de Sender persistente do cliente
+                sender = client_senders.get(address)
+                if sender:
+                    print(f"Enviando broadcast para {username}@{address}")
+                    sender.rdt_send(message_bytes)
+                else:
+                    print(f"ERRO: Não foi encontrado um sender RDT para {username}@{address}")
             except Exception as e:
                 print(f"Erro ao enviar broadcast para {username}: {e}")
 
@@ -128,12 +142,10 @@ while True:
 
         # pegar os dados e o endereço de quem enviou
         raw_packet, client_address = server_socket.recvfrom(1024)
-
+        threading.Thread(target=handle_message, args=(raw_packet, client_address, server_socket), daemon=True).start()
         # usando uma thread para liberar o loop principal para receber a próxima mensagem imediatamente
-        handle_message(raw_packet, client_address, server_socket)
+        # handle_message(raw_packet, client_address, server_socket)
     
     except Exception as e:
         print(f"Erro no loop principal: {e}")
-
-
 
