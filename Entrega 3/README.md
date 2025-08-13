@@ -1,9 +1,3 @@
-Excelente ideia\! Juntar tudo em um único `README.md` deixa a documentação completa e fácil de consultar.
-
-Aqui está a versão final do `README.md` para a terceira entrega, unindo as informações de conexão com a lista detalhada de todos os outros comandos.
-
------
-
 # Entrega 3 – Chat com Sala Única
 
 Esta é a terceira e última etapa do projeto da disciplina de Infraestrutura de Comunicações. Nesta fase, foi desenvolvido um chat de sala única multiusuário, que utiliza o protocolo RDT 3.0 implementado na etapa anterior para garantir uma comunicação confiável sobre UDP.
