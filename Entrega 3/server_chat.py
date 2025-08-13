@@ -1,295 +1,180 @@
-# Module: server_chat.py
-# Implements the server side of the chat system.
+# modulo: server_chat.py
+# implementa o lado do servidor do chat de sala unica.
 
 import socket
 import datetime
 from threading import Thread
 from rdt_protocol import send_data, receive_data
 
-# --- Server Configuration ---
+# --- configuracao do servidor ---
 HOST = "localhost"
 MAIN_PORT = 12000
 BUFFER_SIZE = 1024
 
-# --- Data Structures for State Management ---
-USER_REGISTRY = {}      # {username: (address, port)}
-ACTIVE_SESSIONS = {}    # {username: {"expected_seq_num": int}}
-FOLLOW_LISTS = {}       # {username: {set_of_followed_users}}
-CHAT_GROUPS = {}        # {group_key: {"name": str, "owner": str, "members": {username: (addr,port)}}}
+# --- estruturas de dados para gerenciamento de estado ---
+ACTIVE_USERS = {}       # {username: {"addr": (ip, port), "seq_num": int}}
+FRIEND_LISTS = {}     # {user1: {friend1, friend2}, user2: {friend3}}
+BAN_VOTES = {}        # {target_user: {"voters": {user1, user2}, "required": int}}
 
-# --- Helper Functions ---
+# --- funcoes auxiliares ---
 def get_user_by_address(address):
-    """Finds a username based on their socket address."""
-    return next((user for user, addr in USER_REGISTRY.items() if addr == address), None)
-
-def group_key_exists(group_key):
-    """Checks if a group key is already in use."""
-    return group_key in CHAT_GROUPS
-
-def get_group_id_by_name(group_name, username):
-    """Finds a group's ID by its name, if the user is a member."""
-    for group_id, group_info in CHAT_GROUPS.items():
-        if group_info["name"] == group_name and username in group_info["members"]:
-            return group_id
+    """encontra um nome de usuario com base em seu endereco."""
+    for user, data in ACTIVE_USERS.items():
+        if data["addr"] == address:
+            return user
     return None
 
 def send_response(sock, message, client_address):
-    """Helper to send a response message back to the client."""
+    """envia uma resposta para um cliente especifico."""
     response_addr = (client_address[0], client_address[1] + 1)
     send_data(sock, message, response_addr, {'num': 0})
 
-# --- Command Handling Logic ---
-
-def handle_login(sock, args, client_address):
-    username = args[0]
-    if username in ACTIVE_SESSIONS:
-        send_response(sock, "Error: This username is already in use.", client_address)
-    else:
-        USER_REGISTRY[username] = client_address
-        ACTIVE_SESSIONS[username] = {"expected_seq_num": 1}
-        if username not in FOLLOW_LISTS:
-            FOLLOW_LISTS[username] = set()
-        send_response(sock, f"Login successful! Welcome, {username}.", client_address)
-
-def handle_logout(sock, args, client_address):
-    username = get_user_by_address(client_address)
-    if username and username in ACTIVE_SESSIONS:
-        del ACTIVE_SESSIONS[username]
-        send_response(sock, f"Logout successful. Goodbye, {username}.", client_address)
-    else:
-        send_response(sock, "Error: You are not logged in.", client_address)
-
-def handle_follow(sock, args, client_address):
-    requester = get_user_by_address(client_address)
-    target = args[0]
-    if target not in USER_REGISTRY:
-        send_response(sock, f"Error: User [{target}] not found.", client_address)
-    elif target in FOLLOW_LISTS.get(requester, set()):
-        send_response(sock, f"You are already following user [{target}].", client_address)
-    else:
-        FOLLOW_LISTS[requester].add(target)
-        send_response(sock, f"You are now following [{target}].", client_address)
-        if target in ACTIVE_SESSIONS:
-            target_addr = USER_REGISTRY[target]
-            send_response(sock, f"Notification: [{requester}] has started following you.", target_addr)
-
-def handle_unfollow(sock, args, client_address):
-    requester = get_user_by_address(client_address)
-    target = args[0]
-    if target in FOLLOW_LISTS.get(requester, set()):
-        FOLLOW_LISTS[requester].remove(target)
-        send_response(sock, f"You have unfollowed [{target}].", client_address)
-        if target in ACTIVE_SESSIONS:
-            target_addr = USER_REGISTRY[target]
-            send_response(sock, f"Notification: [{requester}] has unfollowed you.", target_addr)
-    else:
-        send_response(sock, f"You are not following user [{target}].", client_address)
-
-def handle_create_group(sock, args, client_address):
-    username = get_user_by_address(client_address)
-    group_name, group_key = args[0], args[1]
-    if group_key_exists(group_key):
-        send_response(sock, f"Error: The group key [{group_key}] already exists.", client_address)
-    else:
-        CHAT_GROUPS[group_key] = {
-            "name": group_name,
-            "owner": username,
-            "members": {username: client_address},
-            "created_at": datetime.datetime.now()
-        }
-        send_response(sock, f"Group [{group_name}] created successfully!", client_address)
-
-def handle_join_group(sock, args, client_address):
-    username = get_user_by_address(client_address)
-    group_name, group_key = args[0], args[1]
-    group = CHAT_GROUPS.get(group_key)
-    if group and group["name"] == group_name:
-        if username in group["members"]:
-             send_response(sock, f"You are already a member of group [{group_name}].", client_address)
-             return
-        group["members"][username] = client_address
-        send_response(sock, f"You have joined the group [{group_name}].", client_address)
-        # Notify other members
-        for member, addr in group["members"].items():
-            if member != username:
-                send_response(sock, f"Notification: [{username}] has joined the group [{group_name}].", addr)
-    else:
-        send_response(sock, "Error: Invalid group name or key.", client_address)
-
-def handle_leave_group(sock, args, client_address):
-    username = get_user_by_address(client_address)
-    group_name = args[0]
-    group_id = get_group_id_by_name(group_name, username)
-    if group_id:
-        # Notify other members before removing the user
-        for member, addr in CHAT_GROUPS[group_id]["members"].items():
-            if member != username:
-                send_response(sock, f"Notification: [{username}] has left the group [{group_name}].", addr)
-        del CHAT_GROUPS[group_id]["members"][username]
-        send_response(sock, f"You have left the group [{group_name}].", client_address)
-    else:
-        send_response(sock, f"Error: You are not in a group named [{group_name}].", client_address)
-
-def handle_delete_group(sock, args, client_address):
-    owner = get_user_by_address(client_address)
-    group_name = args[0]
-    group_id = get_group_id_by_name(group_name, owner)
-    if group_id and CHAT_GROUPS[group_id]["owner"] == owner:
-        members = CHAT_GROUPS[group_id]["members"].copy()
-        del CHAT_GROUPS[group_id]
-        send_response(sock, f"Group [{group_name}] was successfully deleted.", client_address)
-        # Notify all former members
-        for member, addr in members.items():
-            if member != owner:
-                send_response(sock, f"Notification: The group [{group_name}] has been deleted by its owner.", addr)
-    elif not group_id:
-        send_response(sock, f"Error: Group [{group_name}] not found.", client_address)
-    else:
-        send_response(sock, f"Error: You are not the owner of group [{group_name}].", client_address)
-
-
-def handle_ban_user(sock, args, client_address):
-    owner = get_user_by_address(client_address)
-    user_to_ban, group_name = args[0], args[1]
-    group_id = get_group_id_by_name(group_name, owner)
-    if not group_id:
-        send_response(sock, f"Error: You are not in group [{group_name}].", client_address)
-        return
+def broadcast_message(sock, message, sender_name=None):
+    """envia uma mensagem para todos os usuarios conectados."""
+    server_time = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
     
-    group = CHAT_GROUPS[group_id]
-    if group["owner"] != owner:
-        send_response(sock, f"Error: You are not the owner of group [{group_name}].", client_address)
-    elif user_to_ban not in group["members"]:
-        send_response(sock, f"Error: User [{user_to_ban}] is not in group [{group_name}].", client_address)
+    for user, data in ACTIVE_USERS.items():
+        # se um remetente e especificado, nao envia de volta para ele
+        if sender_name and sender_name == user:
+            continue
+
+        # personaliza a mensagem se for de um amigo
+        final_message = message
+        if sender_name and sender_name in FRIEND_LISTS.get(user, set()):
+            # adiciona a tag [amigo] conforme requisito
+            parts = message.split(":", 2)
+            final_message = f"{parts[0]}:[ amigo ] {parts[1]}: {parts[2]}"
+        
+        send_response(sock, final_message, data["addr"])
+
+# --- logica de tratamento de comandos ---
+def handle_connect(sock, command_parts, client_address):
+    username = " ".join(command_parts[4:])
+    if username in ACTIVE_USERS:
+        send_response(sock, f"erro: nome de usuario '{username}' ja esta em uso.", client_address)
     else:
-        banned_user_addr = group["members"][user_to_ban]
-        del group["members"][user_to_ban]
-        send_response(sock, f"You have been banned from group [{group_name}] by the owner.", banned_user_addr)
-        for member, addr in group["members"].items():
-            send_response(sock, f"Notification: [{user_to_ban}] was banned from group [{group_name}].", addr)
-        send_response(sock, f"User [{user_to_ban}] was successfully banned from [{group_name}].", client_address)
+        ACTIVE_USERS[username] = {"addr": client_address, "seq_num": 1}
+        FRIEND_LISTS[username] = set()
+        send_response(sock, f"conexao aceita: {username}", client_address)
+        broadcast_message(sock, f"servidor: {username} entrou na sala.", sender_name=username)
 
+def handle_disconnect(sock, username, client_address):
+    if username in ACTIVE_USERS:
+        del ACTIVE_USERS[username]
+        # limpa listas de amigos que continham o usuario
+        for user in FRIEND_LISTS:
+            FRIEND_LISTS[user].discard(username)
+        send_response(sock, "voce foi desconectado.", client_address)
+        broadcast_message(sock, f"servidor: {username} saiu da sala.")
 
-def handle_list_online_users(sock, args, client_address):
-    if not ACTIVE_SESSIONS:
-        send_response(sock, "No users are currently online.", client_address)
-        return
-    user_list = "Online Users:\n" + "\n".join(f"- {user}" for user in ACTIVE_SESSIONS)
+def handle_list_users(sock, client_address):
+    user_list = "usuarios conectados:\n" + "\n".join(f"- {user}" for user in ACTIVE_USERS)
     send_response(sock, user_list, client_address)
 
-def handle_list_friends(sock, args, client_address):
-    username = get_user_by_address(client_address)
-    followed_list = FOLLOW_LISTS.get(username, set())
-    if not followed_list:
-        send_response(sock, "You are not following anyone.", client_address)
-        return
-    friend_list = "Followed Users:\n" + "\n".join(f"- {user}" for user in followed_list)
-    send_response(sock, friend_list, client_address)
-
-def handle_list_my_groups(sock, args, client_address):
-    owner = get_user_by_address(client_address)
-    owned_groups = [f"- {g['name']} (Key: {gid})" for gid, g in CHAT_GROUPS.items() if g['owner'] == owner]
-    if not owned_groups:
-        send_response(sock, "You have not created any groups.", client_address)
-        return
-    response = "Groups You Own:\n" + "\n".join(owned_groups)
-    send_response(sock, response, client_address)
-
-def handle_list_groups(sock, args, client_address):
-    user = get_user_by_address(client_address)
-    member_of_groups = [f"- {g['name']} (Owner: {g['owner']})" for gid, g in CHAT_GROUPS.items() if user in g['members']]
-    if not member_of_groups:
-        send_response(sock, "You are not a member of any groups.", client_address)
-        return
-    response = "Groups You Are In:\n" + "\n".join(member_of_groups)
-    send_response(sock, response, client_address)
-
-
-def handle_friend_chat(sock, args, client_address):
-    sender = get_user_by_address(client_address)
-    recipient, message = args[0], args[1]
-    if recipient not in USER_REGISTRY:
-        send_response(sock, f"Error: User [{recipient}] does not exist.", client_address)
-    elif recipient not in FOLLOW_LISTS.get(sender, set()):
-        send_response(sock, f"Error: [{recipient}] is not on your followed list.", client_address)
-    elif recipient in ACTIVE_SESSIONS:
-        recipient_addr = USER_REGISTRY[recipient]
-        formatted_msg = f"(Private) {sender}: {message}"
-        send_response(sock, formatted_msg, recipient_addr)
-        send_response(sock, "Private message sent.", client_address)
+def handle_list_friends(sock, username, client_address):
+    friends = FRIEND_LISTS.get(username, set())
+    if not friends:
+        send_response(sock, "voce nao tem amigos na sua lista.", client_address)
     else:
-        send_response(sock, f"Error: User [{recipient}] is offline.", client_address)
+        friend_list = "sua lista de amigos:\n" + "\n".join(f"- {friend}" for friend in friends)
+        send_response(sock, friend_list, client_address)
 
-def handle_group_chat(sock, args, client_address):
-    sender = get_user_by_address(client_address)
-    group_name, group_key, message = args[0], args[1], args[2]
-    group = CHAT_GROUPS.get(group_key)
-    if group and group["name"] == group_name and sender in group["members"]:
-        formatted_msg = f"({group_name}) {sender}: {message}"
-        for member, addr in group["members"].items():
-            if member != sender:
-                send_response(sock, formatted_msg, addr)
-        send_response(sock, "Message sent to the group.", client_address)
+def handle_add_friend(sock, username, args, client_address):
+    friend_to_add = args[0]
+    if friend_to_add not in ACTIVE_USERS:
+        send_response(sock, f"erro: usuario '{friend_to_add}' nao encontrado ou offline.", client_address)
+    elif friend_to_add == username:
+        send_response(sock, "erro: voce nao pode adicionar a si mesmo.", client_address)
     else:
-        send_response(sock, "Error: You are not a member of this group or the key is incorrect.", client_address)
+        FRIEND_LISTS[username].add(friend_to_add)
+        send_response(sock, f"voce adicionou '{friend_to_add}' a sua lista de amigos.", client_address)
 
-# Maps command strings to handler functions
-COMMAND_DISPATCHER = {
-    'login': handle_login,
-    'logout': handle_logout,
-    'follow': handle_follow,
-    'unfollow': handle_unfollow,
-    'create_group': handle_create_group,
-    'delete_group': handle_delete_group,
-    'join': handle_join_group,
-    'leave': handle_leave_group,
-    'ban': handle_ban_user,
-    'chat_friend': handle_friend_chat,
-    'chat_group': handle_group_chat,
-    'list:cinners': handle_list_online_users,
-    'list:friends': handle_list_friends,
-    'list:mygroups': handle_list_my_groups,
-    'list:groups': handle_list_groups,
-}
+def handle_remove_friend(sock, username, args, client_address):
+    friend_to_remove = args[0]
+    if friend_to_remove in FRIEND_LISTS.get(username, set()):
+        FRIEND_LISTS[username].remove(friend_to_remove)
+        send_response(sock, f"voce removeu '{friend_to_remove}' da sua lista de amigos.", client_address)
+    else:
+        send_response(sock, f"erro: '{friend_to_remove}' nao esta na sua lista de amigos.", client_address)
 
+def handle_ban(sock, voter, args, client_address):
+    target_user = args[0]
+    if target_user not in ACTIVE_USERS:
+        send_response(sock, f"erro: usuario '{target_user}' nao esta na sala.", client_address)
+        return
+    
+    required_votes = (len(ACTIVE_USERS) // 2) + 1
+
+    # inicia uma nova votacao se nao existir
+    if target_user not in BAN_VOTES:
+        BAN_VOTES[target_user] = {"voters": set(), "required": required_votes}
+    
+    # adiciona voto
+    BAN_VOTES[target_user]["voters"].add(voter)
+    current_votes = len(BAN_VOTES[target_user]["voters"])
+
+    # notifica a todos sobre o status da votacao
+    broadcast_message(sock, f"servidor: votacao para banir [{target_user}] - votos: {current_votes}/{required_votes}.")
+
+    # verifica se o banimento foi atingido
+    if current_votes >= required_votes:
+        broadcast_message(sock, f"servidor: [{target_user}] foi banido da sala por votacao.")
+        target_address = ACTIVE_USERS[target_user]["addr"]
+        handle_disconnect(sock, target_user, target_address)
+        del BAN_VOTES[target_user]
+
+def handle_chat_message(sock, username, message, client_address):
+    user_ip, user_port = client_address
+    server_time = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+    # formato: <IP>:<PORTA>/~<nome_usuario>: <mensagem> <hora-data>
+    formatted_message = f"{user_ip}:{user_port}/~{username}: {message} {server_time}"
+    broadcast_message(sock, formatted_message, sender_name=username)
+
+# --- thread de tratamento de cliente ---
 def handle_client_request(data, client_address, thread_port):
-    """Function executed by a thread for each received request."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as thread_socket:
         thread_socket.bind((HOST, thread_port))
 
-        user = get_user_by_address(client_address)
-        expected_seq_num_tracker = {'num': ACTIVE_SESSIONS.get(user, {}).get("expected_seq_num", 0)}
-
-        raw_command = receive_data(thread_socket, data, client_address, expected_seq_num_tracker)
+        username = get_user_by_address(client_address)
+        expected_seq_num = ACTIVE_USERS.get(username, {}).get("seq_num", 0)
+        
+        raw_command = receive_data(thread_socket, data, client_address, {'num': expected_seq_num})
         if not raw_command:
             return
 
-        if user in ACTIVE_SESSIONS:
-            ACTIVE_SESSIONS[user]["expected_seq_num"] = expected_seq_num_tracker['num']
+        if username in ACTIVE_USERS:
+            ACTIVE_USERS[username]["seq_num"] = 1 - expected_seq_num
 
         command_str = raw_command.decode('utf-8')
         parts = command_str.split(' ')
-        command_name = parts[0]
-        
-        args = []
-        if command_name == "chat_group" and len(parts) >= 4:
-            args = [parts[1], parts[2], " ".join(parts[3:])]
-        elif command_name == "chat_friend" and len(parts) >= 3:
-            args = [parts[1], " ".join(parts[2:])]
+        command = parts[0].lower()
+
+        # tratamento de comandos
+        if command_str.lower().startswith("hi, meu nome eh"):
+            handle_connect(thread_socket, parts, client_address)
+        elif not username:
+            send_response(thread_socket, "erro: comando invalido. conecte-se primeiro.", client_address)
+        elif command == "bye":
+            handle_disconnect(thread_socket, username, client_address)
+        elif command == "list":
+            handle_list_users(thread_socket, client_address)
+        elif command == "mylist":
+            handle_list_friends(thread_socket, username, client_address)
+        elif command == "addtomylist" and len(parts) > 1:
+            handle_add_friend(thread_socket, username, parts[1:], client_address)
+        elif command == "rmvfrommylist" and len(parts) > 1:
+            handle_remove_friend(thread_socket, username, parts[1:], client_address)
+        elif command == "ban" and len(parts) > 1:
+            handle_ban(thread_socket, username, parts[1:], client_address)
         else:
-            args = parts[1:]
-        
-        handler = COMMAND_DISPATCHER.get(command_name)
-        if handler:
-            handler(thread_socket, args, client_address)
-        else:
-            send_response(sock, f"Error: Unknown command '{command_name}'.", client_address)
+            # se nao for um comando, e uma mensagem de chat
+            handle_chat_message(thread_socket, username, command_str, client_address)
 
 def start_server():
-    """Creates the main server socket and enters the listening loop."""
+    """cria o socket principal do servidor e entra no loop de escuta."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as main_socket:
         main_socket.bind((HOST, MAIN_PORT))
-        print(f"Chat server started at {HOST}:{MAIN_PORT}. Waiting for connections...")
+        print(f"servidor de chat iniciado em {HOST}:{MAIN_PORT}. aguardando conexoes...")
         
         thread_port_counter = 0
         while True:
@@ -298,10 +183,10 @@ def start_server():
                 thread_port_counter += 1
                 new_thread_port = MAIN_PORT + thread_port_counter
                 
-                client_thread = Thread(target=handle_client_request, args=(data, client_address, new_thread_port))
+                client_thread = Thread(target=handle_client_request, args=(data, client_address, new_thread_port), daemon=True)
                 client_thread.start()
             except KeyboardInterrupt:
-                print("\nServer is shutting down.")
+                print("\nservidor esta desligando.")
                 break
 
 if __name__ == "__main__":

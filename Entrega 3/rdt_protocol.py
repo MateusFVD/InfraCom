@@ -1,95 +1,95 @@
-# Module: rdt_protocol.py
-# Responsible for the implementation of the reliable transport layer (RDT 3.0).
+# modulo: rdt_protocol.py
+# responsavel pela implementacao da camada de transporte confiavel (rdt 3.0).
 
 import socket
 
-PACKET_SIZE = 1024  # Total size of the UDP datagram
+PACKET_SIZE = 1024  # tamanho total do datagrama udp
 
 def send_data(sock, message, destination_address, sequence_number_tracker):
     """
-    Sends data reliably using the RDT 3.0 protocol.
+    envia dados de forma confiavel usando o protocolo rdt 3.0.
 
-    Args:
-        sock (socket.socket): The sender's socket.
-        message (str): The message to be sent.
-        destination_address (tuple): The recipient's address (IP, port).
-        sequence_number_tracker (dict): A dictionary to track the sequence number.
+    args:
+        sock (socket.socket): o socket do remetente.
+        message (str): a mensagem a ser enviada.
+        destination_address (tuple): o endereco do destinatario (ip, porta).
+        sequence_number_tracker (dict): um dicionario para rastrear o numero de sequencia.
     """
     offset = 0
     delimiter = "::"
     header_size = len(f"{sequence_number_tracker['num']}{delimiter}")
     payload_size = PACKET_SIZE - header_size
 
-    # Fragment the message into segments and send them one by one
+    # fragmenta a mensagem em segmentos e os envia um por um
     while offset < len(message):
         segment = message[offset : offset + payload_size]
         ack_confirmed = False
 
-        # Build the datagram with the sequence number
+        # constroi o datagrama com o numero de sequencia
         datagram = f"{sequence_number_tracker['num']}{delimiter}{segment}"
         
-        # Send the datagram and wait for the ACK
+        # envia o datagrama e espera pelo ack
         sock.sendto(datagram.encode('utf-8'), destination_address)
 
         while not ack_confirmed:
             try:
                 ack_packet, _ = sock.recvfrom(PACKET_SIZE)
-                # Check if the ACK corresponds to the sent sequence
+                # verifica se o ack corresponde a sequencia enviada
                 if ack_packet.decode('utf-8') == f"ACK{sequence_number_tracker['num']}":
                     ack_confirmed = True
-                    # Alternate the sequence number (0 -> 1, 1 -> 0)
+                    # alterna o numero de sequencia (0 -> 1, 1 -> 0)
                     sequence_number_tracker['num'] = 1 - sequence_number_tracker['num']
                 else:
-                    # Incorrect ACK, resend the packet
+                    # ack incorreto, reenvia o pacote
                     sock.sendto(datagram.encode('utf-8'), destination_address)
             except socket.timeout:
-                # Timeout: resend the packet
+                # timeout: reenvia o pacote
                 sock.sendto(datagram.encode('utf-8'), destination_address)
             except ConnectionResetError:
-                print("Warning: The connection was reset by the other side.")
+                print("aviso: a conexao foi resetada pelo outro lado.")
                 return
 
         offset += payload_size
 
 def receive_data(sock, received_packet, sender_address, expected_sequence_tracker):
     """
-    Receives data reliably using the RDT 3.0 protocol.
+    recebe dados de forma confiavel usando o protocolo rdt 3.0.
 
-    Args:
-        sock (socket.socket): The receiver's socket.
-        received_packet (bytes): The received data packet.
-        sender_address (tuple): The sender's address.
-        expected_sequence_tracker (dict): Dictionary to track the expected sequence.
+    args:
+        sock (socket.socket): o socket do receptor.
+        received_packet (bytes): o pacote de dados recebido.
+        sender_address (tuple): o endereco do remetente.
+        expected_sequence_tracker (dict): dicionario para rastrear a sequencia esperada.
 
-    Returns:
-        bytes: The message content if the packet is received correctly, otherwise None.
+    returns:
+        bytes: o conteudo da mensagem se o pacote for recebido corretamente, caso contrario none.
     """
     try:
         if not received_packet:
             return None
 
-        # Split the packet into the header (sequence number) and the payload
+        # divide o pacote no cabecalho (numero de sequencia) e na carga util
         delimiter = b"::"
         header, payload = received_packet.split(delimiter, 1)
         received_sequence_num = int(header.decode('utf-8'))
 
-        # Compare the received sequence number with the expected one
+        # compara o numero de sequencia recebido com o esperado
         if received_sequence_num == expected_sequence_tracker['num']:
-            # Correct sequence: send ACK and return the payload
+            # sequencia correta: envia ack e retorna a carga util
             ack_msg = f"ACK{expected_sequence_tracker['num']}"
             sock.sendto(ack_msg.encode('utf-8'), sender_address)
-            # Alternate the expected sequence number for the next packet
+            # alterna o numero de sequencia esperado para o proximo pacote
             expected_sequence_tracker['num'] = 1 - expected_sequence_tracker['num']
             return payload
         else:
-            # Incorrect sequence (duplicate packet): resend ACK of the last correct sequence
+            # sequencia incorreta (pacote duplicado): reenvia o ack da ultima sequencia correta
             ack_msg = f"ACK{1 - expected_sequence_tracker['num']}"
             sock.sendto(ack_msg.encode('utf-8'), sender_address)
-            return None  # Discard the out-of-order packet
+            return None  # descarta o pacote fora de ordem
             
     except (ValueError, IndexError):
-        # Malformed packet, ignore
+        # pacote malformado, ignora
         return None
     except ConnectionResetError:
-        print("Warning: The connection with the client has been terminated.")
+        print("aviso: a conexao com o cliente foi encerrada.")
         return None
