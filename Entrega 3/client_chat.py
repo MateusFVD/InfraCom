@@ -8,7 +8,7 @@ init(autoreset=True)
 
 # configuracao do cliente
 SERVER_HOST = "localhost"
-SERVER_PORT = 12000
+SERVER_PORT = 5000
 BUFFER_SIZE = 1024
 
 # estado do cliente

@@ -1,15 +1,17 @@
 import socket
 import datetime
-from threading import Thread
+import time
+from threading import Thread, Timer
 from rdt_protocol import send_data, receive_data
 
 # configuracao do servidor
 HOST = "localhost"
 MAIN_PORT = 5000
 BUFFER_SIZE = 1024
+CLIENT_TIMEOUT = 120  # timeout em segundos para detectar clientes inativos
 
 # estruturas de dados para gerenciamento de estado
-ACTIVE_USERS = {}       # {username: {"addr": (ip, port), "seq_num": int}}
+ACTIVE_USERS = {}       # {username: {"addr": (ip, port), "seq_num": int, "last_activity": timestamp}}
 FRIEND_LISTS = {}     # {user1: {friend1, friend2}, user2: {friend3}}
 BAN_VOTES = {}        # {target_user: {"voters": {user1, user2}, "required": int}}
 
@@ -20,6 +22,31 @@ def get_user_by_address(address):
         if data["addr"] == address:
             return user
     return None
+
+def cleanup_inactive_users():
+    # remove usuarios que nao enviaram mensagens recentemente
+    current_time = time.time()
+    inactive_users = []
+    
+    for username, data in ACTIVE_USERS.items():
+        if current_time - data["last_activity"] > CLIENT_TIMEOUT:
+            inactive_users.append(username)
+    
+    for username in inactive_users:
+        print(f"Removendo usuario inativo: {username}")
+        if username in ACTIVE_USERS:
+            del ACTIVE_USERS[username]
+        # limpa listas de amigos que continham o usuario
+        for user in FRIEND_LISTS:
+            FRIEND_LISTS[user].discard(username)
+        # remove votacoes relacionadas ao usuario
+        if username in BAN_VOTES:
+            del BAN_VOTES[username]
+    
+    # agenda proxima verificacao
+    timer = Timer(10.0, cleanup_inactive_users)
+    timer.daemon = True
+    timer.start()
 
 def send_response(sock, message, client_address):
     # envia uma resposta para um cliente especifico.
@@ -50,7 +77,7 @@ def handle_connect(sock, command_parts, client_address):
     if username in ACTIVE_USERS:
         send_response(sock, f"erro: nome de usuario '{username}' ja esta em uso.", client_address)
     else:
-        ACTIVE_USERS[username] = {"addr": client_address, "seq_num": 1}
+        ACTIVE_USERS[username] = {"addr": client_address, "seq_num": 1, "last_activity": time.time()}
         FRIEND_LISTS[username] = set()
         send_response(sock, f"conexao aceita: {username}", client_address)
         broadcast_message(sock, f"servidor: {username} entrou na sala.", sender_name=username)
@@ -139,8 +166,10 @@ def handle_client_request(data, client_address, thread_port):
         if not raw_command:
             return
 
+        # atualiza timestamp de atividade para usuarios conhecidos
         if username in ACTIVE_USERS:
             ACTIVE_USERS[username]["seq_num"] = 1 - expected_seq_num
+            ACTIVE_USERS[username]["last_activity"] = time.time()
 
         command_str = raw_command.decode('utf-8')
         parts = command_str.split(' ')
@@ -172,6 +201,9 @@ def start_server():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as main_socket:
         main_socket.bind((HOST, MAIN_PORT))
         print(f"servidor de chat iniciado em {HOST}:{MAIN_PORT}. aguardando conexoes...")
+        
+        # inicia o timer de limpeza de usuarios inativos
+        cleanup_inactive_users()
         
         thread_port_counter = 0
         while True:
