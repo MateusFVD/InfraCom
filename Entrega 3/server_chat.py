@@ -1,151 +1,222 @@
 import socket
-import threading
-from rdt_protocol import RDT3_0_Sender, RDT3_0_Receiver
-from datetime import datetime
+import datetime
+import time
+from threading import Thread, Timer
+from rdt_protocol import send_data, receive_data
 
-# dicionario para guarda a lista de usuarios
-clients = {} 
+# configuracao do servidor
+HOST = "localhost"
+MAIN_PORT = 5000
+BUFFER_SIZE = 1024
+CLIENT_TIMEOUT = 120  # timeout em segundos para detectar clientes inativos
 
-# dicionário para guardar o estado RDT de cada cliente: {(ip, port): expected_seq_num}
-client_rdt_state = {}
+# estruturas de dados para gerenciamento de estado
+ACTIVE_USERS = {}       # {username: {"addr": (ip, port), "seq_num": int, "last_activity": timestamp}}
+FRIEND_LISTS = {}     # {user1: {friend1, friend2}, user2: {friend3}}
+BAN_VOTES = {}        # {target_user: {"voters": {user1, user2}, "required": int}}
 
-client_senders = {}
+# funcoes auxiliares
+def get_user_by_address(address):
+   # encontra um nome de usuario com base em seu endereco.
+    for user, data in ACTIVE_USERS.items():
+        if data["addr"] == address:
+            return user
+    return None
 
-# proteger o acesso ao dicionário, evitar mais de uma thread mexendo ao mesmo tempo
-clients_lock = threading.Lock() 
-
-
-HOST = "127.0.0.1"
-PORT = 5000
-SERVER_ADDRESS = (HOST, PORT)
-
-# BUFFER_SIZE = 1023  # Reservando apenas 1 byte para o número de sequência
-
-# criando o socket do servidor
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-# vinculando o servidor ao endereço especificado
-server_socket.bind(SERVER_ADDRESS)
-
-print(f"Servidor UDP iniciado e escutando em {HOST}:{PORT}")
-print("Aguardando um cliente se conectar...")
-
-def handle_message(packet, address, sock):
-
-    # pega o próximo número de sequência esperado para este endereço.
-
-    with clients_lock:
-        expected_seq = client_rdt_state.get(address, 0)
+def cleanup_inactive_users():
+    # remove usuarios que nao enviaram mensagens recentemente
+    current_time = time.time()
+    inactive_users = []
     
-    receiver_tool = RDT3_0_Receiver(sock) # usamos a classe como uma ferramenta sem estado aqui
+    for username, data in ACTIVE_USERS.items():
+        if current_time - data["last_activity"] > CLIENT_TIMEOUT:
+            inactive_users.append(username)
+    
+    for username in inactive_users:
+        print(f"Removendo usuario inativo: {username}")
+        if username in ACTIVE_USERS:
+            del ACTIVE_USERS[username]
+        # limpa listas de amigos que continham o usuario
+        for user in FRIEND_LISTS:
+            FRIEND_LISTS[user].discard(username)
+        # remove votacoes relacionadas ao usuario
+        if username in BAN_VOTES:
+            del BAN_VOTES[username]
+    
+    # agenda proxima verificacao
+    timer = Timer(10.0, cleanup_inactive_users)
+    timer.daemon = True
+    timer.start()
 
-    received_seq = receiver_tool.extract_seq(packet)
-    # o pacote recebido tem a sequência que estávamos esperando para este cliente?
-    if received_seq == expected_seq:
-        message_bytes = receiver_tool.extract_data(packet)
-        message = message_bytes.decode()
+def send_response(sock, message, client_address):
+    # envia uma resposta para um cliente especifico.
+    response_addr = (client_address[0], client_address[1] + 1)
+    send_data(sock, message, response_addr, {'num': 0})
+
+def broadcast_message(sock, message, sender_name=None):
+    # envia uma mensagem para todos os usuarios conectados.
+    server_time = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+    
+    for user, data in ACTIVE_USERS.items():
+        # se um remetente e especificado, nao envia de volta para ele
+        if sender_name and sender_name == user:
+            continue
+
+        # personaliza a mensagem se for de um amigo
+        final_message = message
+        if sender_name and sender_name in FRIEND_LISTS.get(user, set()):
+            # adiciona a tag [amigo] conforme requisito
+            parts = message.split(":", 2)
+            final_message = f"{parts[0]}:[ amigo ] {parts[1]}: {parts[2]}"
         
-        # envia o ACK correto
-        ack_packet = receiver_tool.make_pkt(expected_seq, b'')
-        sock.sendto(ack_packet, address)
-        
-        # ATUALIZA A MEMÓRIA: Agora vamos esperar o próximo número de sequência
-        with clients_lock:
-            client_rdt_state[address] = 1 - expected_seq
-        
-        process_client_message(message, address, sock)
+        send_response(sock, final_message, data["addr"])
 
-    else: # se o pacote for duplicado ou fora de ordem
-        ack_to_resend = 1 - expected_seq
-        ack_packet = receiver_tool.make_pkt(ack_to_resend, b'')
-        sock.sendto(ack_packet, address)
-        print(f"Pacote fora de ordem de {address} (seq={received_seq}, esperava={expected_seq}). Reenviando ACK {ack_to_resend}.")
-
-        
-def process_client_message(message, address, sock):        
-    if "hi, meu nome eh " in message:
-        username = message.split("hi, meu nome eh ")[1].strip()
-        
-        with clients_lock:
-            if username in [name for name, addr in clients.values()]:
-                error_message = "ERRO: Nome de usuário já existe. Tente outro."
-                temp_sender = RDT3_0_Sender(sock, address)
-                temp_sender.rdt_send(error_message.encode())
-                return 
-            
-
-            clients[address] = (username, address)
-            # client_rdt_state[address] = 0
-
-            client_senders[address] = RDT3_0_Sender(sock, address)
-
-            print(f"Usuário '{username}' conectado de {address}")
-
-        # Formata corretamente a mensagem de entrada
-        broadcast_message(f"SERVER_INFO:{username} entrou na sala.", sock, origin_address=address)
-
-    elif "bye" in message:
-        with clients_lock:
-            if address in clients:
-                username, _ = clients[address]
-                del clients[address]
-                
-                # limpa o estado RDT do cliente que saiu
-                if address in client_rdt_state:
-                    del client_rdt_state[address]
-                if address in client_senders:
-                    del client_senders[address]
-                    
-                broadcast_message(f"SERVER_INFO:{username} saiu da sala.", sock)
-                print(f"Usuário '{username}' desconectado")
-
+# logica de tratamento de comandos   
+def handle_connect(sock, command_parts, client_address):
+    username = " ".join(command_parts[4:])
+    if username in ACTIVE_USERS:
+        send_response(sock, f"erro: nome de usuario '{username}' ja esta em uso.", client_address)
     else:
-        sender_username = None
-        with clients_lock:
-            if address in clients:
-                sender_username, _ = clients[address]
+        ACTIVE_USERS[username] = {"addr": client_address, "seq_num": 1, "last_activity": time.time()}
+        FRIEND_LISTS[username] = set()
+        send_response(sock, f"conexao aceita: {username}", client_address)
+        broadcast_message(sock, f"servidor: {username} entrou na sala.", sender_name=username)
+
+def handle_disconnect(sock, username, client_address):
+    if username in ACTIVE_USERS:
+        del ACTIVE_USERS[username]
+        # limpa listas de amigos que continham o usuario
+        for user in FRIEND_LISTS:
+            FRIEND_LISTS[user].discard(username)
+        send_response(sock, "voce foi desconectado.", client_address)
+        broadcast_message(sock, f"servidor: {username} saiu da sala.")
+
+def handle_list_users(sock, client_address):
+    user_list = "usuarios conectados:\n" + "\n".join(f"- {user}" for user in ACTIVE_USERS)
+    send_response(sock, user_list, client_address)
+
+def handle_list_friends(sock, username, client_address):
+    friends = FRIEND_LISTS.get(username, set())
+    if not friends:
+        send_response(sock, "voce nao tem amigos na sua lista.", client_address)
+    else:
+        friend_list = "sua lista de amigos:\n" + "\n".join(f"- {friend}" for friend in friends)
+        send_response(sock, friend_list, client_address)
+
+def handle_add_friend(sock, username, args, client_address):
+    friend_to_add = args[0]
+    if friend_to_add not in ACTIVE_USERS:
+        send_response(sock, f"erro: usuario '{friend_to_add}' nao encontrado ou offline.", client_address)
+    elif friend_to_add == username:
+        send_response(sock, "erro: voce nao pode adicionar a si mesmo.", client_address)
+    else:
+        FRIEND_LISTS[username].add(friend_to_add)
+        send_response(sock, f"voce adicionou '{friend_to_add}' a sua lista de amigos.", client_address)
+
+def handle_remove_friend(sock, username, args, client_address):
+    friend_to_remove = args[0]
+    if friend_to_remove in FRIEND_LISTS.get(username, set()):
+        FRIEND_LISTS[username].remove(friend_to_remove)
+        send_response(sock, f"voce removeu '{friend_to_remove}' da sua lista de amigos.", client_address)
+    else:
+        send_response(sock, f"erro: '{friend_to_remove}' nao esta na sua lista de amigos.", client_address)
+
+def handle_ban(sock, voter, args, client_address):
+    target_user = args[0]
+    if target_user not in ACTIVE_USERS:
+        send_response(sock, f"erro: usuario '{target_user}' nao esta na sala.", client_address)
+        return
+    
+    required_votes = (len(ACTIVE_USERS) // 2) + 1
+
+    # inicia uma nova votacao se nao existir
+    if target_user not in BAN_VOTES:
+        BAN_VOTES[target_user] = {"voters": set(), "required": required_votes}
+    
+    # adiciona voto
+    BAN_VOTES[target_user]["voters"].add(voter)
+    current_votes = len(BAN_VOTES[target_user]["voters"])
+
+    # notifica a todos sobre o status da votacao
+    broadcast_message(sock, f"servidor: votacao para banir [{target_user}] - votos: {current_votes}/{required_votes}.")
+
+    # verifica se o banimento foi atingido
+    if current_votes >= required_votes:
+        broadcast_message(sock, f"servidor: [{target_user}] foi banido da sala por votacao.")
+        target_address = ACTIVE_USERS[target_user]["addr"]
+        handle_disconnect(sock, target_user, target_address)
+        del BAN_VOTES[target_user]
+
+def handle_chat_message(sock, username, message, client_address):
+    user_ip, user_port = client_address
+    server_time = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+    # formato: <IP>:<PORTA>/~<nome_usuario>: <mensagem> <hora-data>
+    formatted_message = f"{user_ip}:{user_port}/~{username}: {message} {server_time}"
+    broadcast_message(sock, formatted_message, sender_name=username)
+
+# thread de tratamento de cliente
+def handle_client_request(data, client_address, thread_port):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as thread_socket:
+        thread_socket.bind((HOST, thread_port))
+
+        username = get_user_by_address(client_address)
+        expected_seq_num = ACTIVE_USERS.get(username, {}).get("seq_num", 0)
         
-        if sender_username:
-            # formata a mensagem 
-            timestamp = datetime.now().strftime("%H:%M:%S %d/%m/%Y")
-            formatted_message = f"{address[0]}:{address[1]}/~{sender_username}: {message} {timestamp}"
-            
-            print(f"Retransmitindo mensagem de {sender_username}")
-            # envia a mensagem para todos, exceto o remetente original 
-            broadcast_message(formatted_message, sock, origin_address=address)
-            
-# envia uma mensagem para todos os clientes conectados
-def broadcast_message(message, sock, origin_address=None):
-    with clients_lock:
-        clients_copy = clients.copy()
-        # Prepara a mensagem uma única vez
-        message_bytes = message.encode()
+        raw_command = receive_data(thread_socket, data, client_address, {'num': expected_seq_num})
+        if not raw_command:
+            return
+
+        # atualiza timestamp de atividade para usuarios conhecidos
+        if username in ACTIVE_USERS:
+            ACTIVE_USERS[username]["seq_num"] = 1 - expected_seq_num
+            ACTIVE_USERS[username]["last_activity"] = time.time()
+
+        command_str = raw_command.decode('utf-8')
+        parts = command_str.split(' ')
+        command = parts[0].lower()
+
+        # tratamento de comandos
+        if command_str.lower().startswith("hi, meu nome eh"):
+            handle_connect(thread_socket, parts, client_address)
+        elif not username:
+            send_response(thread_socket, "erro: comando invalido. conecte-se primeiro.", client_address)
+        elif command == "bye":
+            handle_disconnect(thread_socket, username, client_address)
+        elif command == "list":
+            handle_list_users(thread_socket, client_address)
+        elif command == "mylist":
+            handle_list_friends(thread_socket, username, client_address)
+        elif command == "addtomylist" and len(parts) > 1:
+            handle_add_friend(thread_socket, username, parts[1:], client_address)
+        elif command == "rmvfrommylist" and len(parts) > 1:
+            handle_remove_friend(thread_socket, username, parts[1:], client_address)
+        elif command == "ban" and len(parts) > 1:
+            handle_ban(thread_socket, username, parts[1:], client_address)
+        else:
+            # se nao for um comando, e uma mensagem de chat
+            handle_chat_message(thread_socket, username, command_str, client_address)
+
+def start_server():
+    # cria o socket principal do servidor e entra no loop de escuta.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as main_socket:
+        main_socket.bind((HOST, MAIN_PORT))
+        print(f"servidor de chat iniciado em {HOST}:{MAIN_PORT}. aguardando conexoes...")
         
-        for address, (username, _) in clients_copy.items():
-            if address == origin_address:
-                continue
-            
+        # inicia o timer de limpeza de usuarios inativos
+        cleanup_inactive_users()
+        
+        thread_port_counter = 0
+        while True:
             try:
-                # Usa a instância de Sender persistente do cliente
-                sender = client_senders.get(address)
-                if sender:
-                    print(f"Enviando broadcast para {username}@{address}")
-                    sender.rdt_send(message_bytes)
-                else:
-                    print(f"ERRO: Não foi encontrado um sender RDT para {username}@{address}")
-            except Exception as e:
-                print(f"Erro ao enviar broadcast para {username}: {e}")
+                data, client_address = main_socket.recvfrom(BUFFER_SIZE)
+                thread_port_counter += 1
+                new_thread_port = MAIN_PORT + thread_port_counter
+                
+                client_thread = Thread(target=handle_client_request, args=(data, client_address, new_thread_port), daemon=True)
+                client_thread.start()
+            except KeyboardInterrupt:
+                print("\nservidor esta desligando.")
+                break
 
-while True:
-    
-    try:
-
-        # pegar os dados e o endereço de quem enviou
-        raw_packet, client_address = server_socket.recvfrom(1024)
-        threading.Thread(target=handle_message, args=(raw_packet, client_address, server_socket), daemon=True).start()
-        # usando uma thread para liberar o loop principal para receber a próxima mensagem imediatamente
-        # handle_message(raw_packet, client_address, server_socket)
-    
-    except Exception as e:
-        print(f"Erro no loop principal: {e}")
-
+if __name__ == "__main__":
+    start_server()

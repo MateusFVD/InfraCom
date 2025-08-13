@@ -1,141 +1,92 @@
 import socket
-import time
-import struct
-import random 
 
-# --- Simulação do canal não confiável ---
-LOSS_PROBABILITY = 0.005  # 0.5% de chance de perda de pacote
+PACKET_SIZE = 1024  # tamanho total do datagrama udp
 
-def udt_send_with_loss(socket_obj, packet, address):
-    """Função para simular perda de pacotes"""
-    if random.random() < LOSS_PROBABILITY:
-        print(f"Simulação de perda: Pacote perdido")
-    else:
-        socket_obj.sendto(packet, address)
+def send_data(sock, message, destination_address, sequence_number_tracker):
+    """
+    envia dados de forma confiavel usando o protocolo rdt 3.0.
 
-class RDT3_0_Sender:
-    def __init__(self, socket_obj, server_address, timeout=2.0):
-        self.socket = socket_obj
-        self.server_address = server_address
-        self.timeout = timeout
-        self.sndpkt = None
-        self.seq_num = 0  # Inicia com número de sequência 0
-        self.timer_start = None
+    args:
+        sock (socket.socket): o socket do remetente.
+        message (str): a mensagem a ser enviada.
+        destination_address (tuple): o endereco do destinatario (ip, porta).
+        sequence_number_tracker (dict): um dicionario para rastrear o numero de sequencia.
+    """
+    offset = 0
+    delimiter = "::"
+    header_size = len(f"{sequence_number_tracker['num']}{delimiter}")
+    payload_size = PACKET_SIZE - header_size
+
+    # fragmenta a mensagem em segmentos e os envia um por um
+    while offset < len(message):
+        segment = message[offset : offset + payload_size]
+        ack_confirmed = False
+
+        # constroi o datagrama com o numero de sequencia
+        datagram = f"{sequence_number_tracker['num']}{delimiter}{segment}"
         
-    def make_pkt(self, seq, data):
-        """Cria um pacote com número de sequência e dados"""
-        if len(data) > 1023:  # Limita o tamanho dos dados
-            data = data[:1023]
-        return struct.pack('!B', seq) + data
-    
-    def extract_seq(self, pkt):
-        """Extrai o número de sequência do pacote"""
-        if len(pkt) < 1:
-            return -1
-        return struct.unpack('!B', pkt[:1])[0]
-    
-    def has_seq(self, pkt, expected_seq):
-        """Verifica se o pacote tem o número de sequência esperado"""
-        return self.extract_seq(pkt) == expected_seq
-    
-    def start_timer(self):
-        """Inicia o timer para retransmissão"""
-        self.timer_start = time.time()
-    
-    def stop_timer(self):
-        """Para o timer"""
-        self.timer_start = None
-    
-    def is_timeout(self):
-        """Verifica se ocorreu timeout"""
-        return self.timer_start is not None and (time.time() - self.timer_start) >= self.timeout
-    
-    def rdt_send(self, data):
-        """Implementação do protocolo RDT 3.0 para envio de dados"""
-        print(f"RDT3.0 Sender: Enviando dados com seq={self.seq_num}")
-        
-        # Cria o pacote
-        self.sndpkt = self.make_pkt(self.seq_num, data)
-        
-        # Envia o pacote (com possível perda simulada)
-        udt_send_with_loss(self.socket, self.sndpkt, self.server_address)
-        self.start_timer()
-        
-        # Espera pelo ACK correto
-        while True:
+        # envia o datagrama e espera pelo ack
+        sock.sendto(datagram.encode('utf-8'), destination_address)
+
+        while not ack_confirmed:
             try:
-                self.socket.settimeout(0.1)  # Timeout curto para verificação periódica
-                rcvpkt, addr = self.socket.recvfrom(1024)
-
-                # Ignora pacotes de outros remetentes
-                if addr != self.server_address:
-                    continue
-                
-                print(f"Sender: ACK recebido de {addr}")
-                
-                # Verifica se é o ACK esperado
-                if self.has_seq(rcvpkt, self.seq_num):
-                    print(f"Sender: ACK correto para seq={self.seq_num}")
-                    self.stop_timer()
-                    self.seq_num = 1 - self.seq_num  # Alterna o número de sequência
-                    break
-                    
-            except socket.timeout:
-                if self.is_timeout():
-                    print(f"RDT3.0 Sender: Timeout! Reenviando pacote seq={self.seq_num}")
-                    udt_send_with_loss(self.socket, self.sndpkt, self.server_address)
-                    self.start_timer()
-                continue
-            finally:
-                self.socket.settimeout(None)
-
-class RDT3_0_Receiver:
-    def __init__(self, socket_obj):
-        self.socket = socket_obj
-        self.expected_seq = 0  # Inicia esperando sequência 0
-        
-    def make_pkt(self, seq, data=b''):
-        """Cria um pacote ACK"""
-        return struct.pack('!B', seq) + data
-    
-    def extract_seq(self, pkt):
-        """Extrai o número de sequência do pacote"""
-        if len(pkt) < 1:
-            return -1
-        return struct.unpack('!B', pkt[:1])[0]
-    
-    def extract_data(self, pkt):
-        """Extrai os dados do pacote"""
-        return pkt[1:] if len(pkt) >= 1 else b''
-    
-    def has_seq(self, pkt, expected_seq):
-        """Verifica se o pacote tem o número de sequência esperado"""
-        return self.extract_seq(pkt) == expected_seq
-    
-    def rdt_rcv(self, client_address=None):
-        while True:
-            try:
-                self.socket.settimeout(1.0)  # Aumenta o timeout
-                rcvpkt, addr = self.socket.recvfrom(1024)
-                
-                if client_address and addr != client_address:
-                    continue
-                
-                received_seq = self.extract_seq(rcvpkt)
-                print(f"Receiver: Pacote recebido seq={received_seq}, esperava={self.expected_seq}")
-                
-                if received_seq == self.expected_seq:
-                    data = self.extract_data(rcvpkt)
-                    ack_pkt = self.make_pkt(self.expected_seq)
-                    udt_send_with_loss(self.socket, ack_pkt, addr)
-                    self.expected_seq = 1 - self.expected_seq
-                    return data
+                ack_packet, _ = sock.recvfrom(PACKET_SIZE)
+                # verifica se o ack corresponde a sequencia enviada
+                if ack_packet.decode('utf-8') == f"ACK{sequence_number_tracker['num']}":
+                    ack_confirmed = True
+                    # alterna o numero de sequencia (0 -> 1, 1 -> 0)
+                    sequence_number_tracker['num'] = 1 - sequence_number_tracker['num']
                 else:
-                    # Envia ACK para o número de sequência que está esperando
-                    ack_pkt = self.make_pkt(1 - self.expected_seq)
-                    udt_send_with_loss(self.socket, ack_pkt, addr)
+                    # ack incorreto, reenvia o pacote
+                    sock.sendto(datagram.encode('utf-8'), destination_address)
             except socket.timeout:
-                continue
-            except Exception as e:
-                print(f"Receiver error: {str(e)}")
-                raise
+                # timeout: reenvia o pacote
+                sock.sendto(datagram.encode('utf-8'), destination_address)
+            except ConnectionResetError:
+                print("aviso: a conexao foi resetada pelo outro lado.")
+                return
+
+        offset += payload_size
+
+def receive_data(sock, received_packet, sender_address, expected_sequence_tracker):
+    """
+    recebe dados de forma confiavel usando o protocolo rdt 3.0.
+
+    args:
+        sock (socket.socket): o socket do receptor.
+        received_packet (bytes): o pacote de dados recebido.
+        sender_address (tuple): o endereco do remetente.
+        expected_sequence_tracker (dict): dicionario para rastrear a sequencia esperada.
+
+    returns:
+        bytes: o conteudo da mensagem se o pacote for recebido corretamente, caso contrario none.
+    """
+    try:
+        if not received_packet:
+            return None
+
+        # divide o pacote no cabecalho (numero de sequencia) e na carga util
+        delimiter = b"::"
+        header, payload = received_packet.split(delimiter, 1)
+        received_sequence_num = int(header.decode('utf-8'))
+
+        # compara o numero de sequencia recebido com o esperado
+        if received_sequence_num == expected_sequence_tracker['num']:
+            # sequencia correta: envia ack e retorna a carga util
+            ack_msg = f"ACK{expected_sequence_tracker['num']}"
+            sock.sendto(ack_msg.encode('utf-8'), sender_address)
+            # alterna o numero de sequencia esperado para o proximo pacote
+            expected_sequence_tracker['num'] = 1 - expected_sequence_tracker['num']
+            return payload
+        else:
+            # sequencia incorreta (pacote duplicado): reenvia o ack da ultima sequencia correta
+            ack_msg = f"ACK{1 - expected_sequence_tracker['num']}"
+            sock.sendto(ack_msg.encode('utf-8'), sender_address)
+            return None  # descarta o pacote fora de ordem
+            
+    except (ValueError, IndexError):
+        # pacote malformado, ignora
+        return None
+    except ConnectionResetError:
+        print("aviso: a conexao com o cliente foi encerrada.")
+        return None
