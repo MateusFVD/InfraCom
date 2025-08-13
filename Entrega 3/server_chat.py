@@ -1,36 +1,33 @@
-# modulo: server_chat.py
-# implementa o lado do servidor do chat de sala unica.
-
 import socket
 import datetime
 from threading import Thread
 from rdt_protocol import send_data, receive_data
 
-# --- configuracao do servidor ---
+# configuracao do servidor 
 HOST = "localhost"
 MAIN_PORT = 12000
 BUFFER_SIZE = 1024
 
-# --- estruturas de dados para gerenciamento de estado ---
+# estruturas de dados para gerenciamento de estado
 ACTIVE_USERS = {}       # {username: {"addr": (ip, port), "seq_num": int}}
 FRIEND_LISTS = {}     # {user1: {friend1, friend2}, user2: {friend3}}
 BAN_VOTES = {}        # {target_user: {"voters": {user1, user2}, "required": int}}
 
-# --- funcoes auxiliares ---
+# funcoes auxiliares
 def get_user_by_address(address):
-    """encontra um nome de usuario com base em seu endereco."""
+    # encontra um nome de usuario com base em seu endereco.
     for user, data in ACTIVE_USERS.items():
         if data["addr"] == address:
             return user
     return None
 
 def send_response(sock, message, client_address):
-    """envia uma resposta para um cliente especifico."""
+    # envia uma resposta para um cliente especifico
     response_addr = (client_address[0], client_address[1] + 1)
     send_data(sock, message, response_addr, {'num': 0})
 
 def broadcast_message(sock, message, sender_name=None):
-    """envia uma mensagem para todos os usuarios conectados."""
+    # envia uma mensagem para todos os usuarios conectados.
     server_time = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
     
     for user, data in ACTIVE_USERS.items():
@@ -47,7 +44,7 @@ def broadcast_message(sock, message, sender_name=None):
         
         send_response(sock, final_message, data["addr"])
 
-# --- logica de tratamento de comandos ---
+# logica de tratamento de comandos
 def handle_connect(sock, command_parts, client_address):
     username = " ".join(command_parts[4:])
     if username in ACTIVE_USERS:
@@ -130,7 +127,7 @@ def handle_chat_message(sock, username, message, client_address):
     formatted_message = f"{user_ip}:{user_port}/~{username}: {message} {server_time}"
     broadcast_message(sock, formatted_message, sender_name=username)
 
-# --- thread de tratamento de cliente ---
+#  thread de tratamento de cliente
 def handle_client_request(data, client_address, thread_port):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as thread_socket:
         thread_socket.bind((HOST, thread_port))
@@ -171,7 +168,7 @@ def handle_client_request(data, client_address, thread_port):
             handle_chat_message(thread_socket, username, command_str, client_address)
 
 def start_server():
-    """cria o socket principal do servidor e entra no loop de escuta."""
+    # cria o socket principal do servidor e entra no loop de escuta
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as main_socket:
         main_socket.bind((HOST, MAIN_PORT))
         print(f"servidor de chat iniciado em {HOST}:{MAIN_PORT}. aguardando conexoes...")
