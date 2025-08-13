@@ -3,8 +3,15 @@ import socket
 PACKET_SIZE = 1024  # tamanho total do datagrama udp
 
 def send_data(sock, message, destination_address, sequence_number_tracker):
-  # envia dados de forma confiavel usando o protocolo rdt 3.0.
-  
+    """
+    envia dados de forma confiavel usando o protocolo rdt 3.0.
+
+    args:
+        sock (socket.socket): o socket do remetente.
+        message (str): a mensagem a ser enviada.
+        destination_address (tuple): o endereco do destinatario (ip, porta).
+        sequence_number_tracker (dict): um dicionario para rastrear o numero de sequencia.
+    """
     offset = 0
     delimiter = "::"
     header_size = len(f"{sequence_number_tracker['num']}{delimiter}")
@@ -42,8 +49,18 @@ def send_data(sock, message, destination_address, sequence_number_tracker):
         offset += payload_size
 
 def receive_data(sock, received_packet, sender_address, expected_sequence_tracker):
-    # recebe dados de forma confiavel usando o protocolo rdt 3.0.
-   
+    """
+    recebe dados de forma confiavel usando o protocolo rdt 3.0.
+
+    args:
+        sock (socket.socket): o socket do receptor.
+        received_packet (bytes): o pacote de dados recebido.
+        sender_address (tuple): o endereco do remetente.
+        expected_sequence_tracker (dict): dicionario para rastrear a sequencia esperada.
+
+    returns:
+        bytes: o conteudo da mensagem se o pacote for recebido corretamente, caso contrario none.
+    """
     try:
         if not received_packet:
             return None

@@ -6,12 +6,12 @@ from rdt_protocol import send_data, receive_data
 # inicializa o colorama
 init(autoreset=True)
 
-#  configuracao do cliente 
+# configuracao do cliente
 SERVER_HOST = "localhost"
 SERVER_PORT = 12000
 BUFFER_SIZE = 1024
 
-# estado do cliente 
+# estado do cliente
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client_socket.bind((SERVER_HOST, 0))
 client_socket.settimeout(5.0)
@@ -22,9 +22,9 @@ RDT_SEQ_TRACKER = {'num': 0}
 # evento para sincronizacao
 server_response_event = Event()
 
-#  thread de recebimento de mensagens
+# thread de recebimento de mensagens
 def listen_for_server_messages():
-    # thread que aguarda e processa mensagens recebidas do servidor
+    # thread que aguarda e processa mensagens recebidas do servidor.
     listen_port = client_socket.getsockname()[1] + 1
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listen_socket:
         listen_socket.bind((SERVER_HOST, listen_port))
@@ -58,12 +58,12 @@ def listen_for_server_messages():
             except Exception:
                 continue
 
-# envio de comandos/mensagens
+#  envio de comandos/mensagens  
 def send_to_server(message_str):
     """envia uma mensagem ou comando para o servidor usando rdt."""
     send_data(client_socket, message_str, (SERVER_HOST, SERVER_PORT), RDT_SEQ_TRACKER)
 
-# loop principal do cliente
+# loop principal do cliente     
 def main_loop():
     # loop principal que captura a entrada do usuario e envia para o servidor
     listen_thread = Thread(target=listen_for_server_messages, daemon=True)
